@@ -42,7 +42,7 @@ RESP_CODE = {
 }
 
 -- a blynk message is 8bit type, 16bit mid, 16bit length, payload and '\0'
-function create_message ( cmd, mid, payload )
+function create_message ( cmd, mid, payload, pCode)
    -- > is big endian
    -- B char, I2 is 2 bytes
    -- sn is a 2byte length followed by the bytes
@@ -53,7 +53,11 @@ function create_message ( cmd, mid, payload )
       msg = msg .. payload
    else
       -- print ( "message is: " .. cmd .. " " .. mid )
-      msg = bitstring.pack ( "8:int,16:int,16:int", cmd, mid, 0)
+      if pCode then
+        msg = bitstring.pack ( "8:int,16:int,16:int", cmd, mid, pCode)
+      else
+        msg = bitstring.pack ( "8:int,16:int,16:int", cmd, mid, 0)
+      end
    end
    return msg
 end
@@ -64,7 +68,7 @@ function handleSock(pSock, pRequestsQueue)
   -- return server answer
   local headerBytes = 5
   -- timeout 500ms
-  pSock.settimeout(0.5)
+  pSock:settimeout(0.5)
   while true do
     local header, errCode, partialResult = pSock:receive(headerBytes)
     if header ~= nil then
@@ -96,8 +100,8 @@ function handleSock(pSock, pRequestsQueue)
   end
 end
 
-function sendCmd(pSock, pQueue, pCmd, pMsgId, pData)
-  local buf = create_message(pCmd, pMsgId, pData)
+function sendCmd(pSock, pQueue, pCmd, pMsgId, pData, pCode)
+  local buf = create_message(pCmd, pMsgId, pData, pCode)
   local result, err, index = pSock:send(buf)
   -- get answer, !!! some server cmd can be arrived before response so check if resp or cmd if cmd put in queue to treat later
   -- while data in receive buffer, check for response (with timeout of 1s)
@@ -106,10 +110,32 @@ function sendCmd(pSock, pQueue, pCmd, pMsgId, pData)
     result, err = handleSock(pSock, pQueue)
     if result == nil then
       print("response error : ", err)
+      return err
+    else
+      print("command success : ", pCmd)
+      return 200
     end
   else
     print(err)
+    return err
   end
+end
+
+function treatCmd(pCmd, pSock, pQueue)
+  --
+  if pCmd == MSG_CMD.PING then
+    sendCmd(pSock, pQueue, MSG_CMD.RSP, pCmd.id, nil, 200)
+  elseif pCmd == MSG_CMD.HW or pCmd == MSG_CMD.BRIDGE then
+    processCmd(pCmd, pSock, pQueue)
+  else
+    print("Command not handled : ", pCmd)
+  end
+end
+
+function processCmd(pCmd, pSock, pQueue)
+  -- check cmd in payload
+  dataItems = String.split(pCmd.data
+
 end
 
 blynk = {}
@@ -136,13 +162,27 @@ function blynk.run()
     if client ~= nil then
       blynk.tcpClient = client
       -- try to authenticate
-      sendCmd(client,blynk.serverCmdQueue,blynk.commands.login,1,blynk.token)
+      local result = sendCmd(client,blynk.serverCmdQueue,blynk.commands.login,1,blynk.token)
+      if result == 200 then
+        -- do nothing more, it will be done in next run
+        blynk.tcpClient = client
+      else
+        -- login failed close socket
+        print("Login failed : ", result)
+        client:close()
+      end
     else
       
     end
-  -- If not nil, check connection
+  -- If not nil, check connection requests
   else
-  
+    local client = blynk.tcpClient
+    handleSock(client, blynk.serverCmdQueue)
+    -- treat queue
+    local queue = blynk.serverCmdQueue
+    while #queue > 0 do
+      treatCmd(table.remove(queue,1), client, blynk.serverCmdQueue)
+    end
   end
 end
 
