@@ -41,6 +41,20 @@ RESP_CODE = {
   NOT_SUPPORTED_VERSION = 20
 }
 
+
+function digitalRead(pPin)
+  -- pin 1 à 100 : BV
+  if pPin <= 100 then
+    local bacnetObj = "BV" .. pPin .. "_Present_Value"
+    return ME[bacnetObj].value
+  end
+  -- pin 101 à 106 : physical inputs
+  if pPin <= 106 and pPin > 100 then
+    local bacnetObj = "BI" .. pPin - 100 .. "_Present_Value"
+    return ME[bacnetObj].value
+  end  
+end
+
 -- a blynk message is 8bit type, 16bit mid, 16bit length, payload and '\0'
 function create_message ( cmd, mid, payload, pCode)
    -- > is big endian
@@ -68,7 +82,7 @@ function handleSock(pSock, pRequestsQueue)
   -- return server answer
   local headerBytes = 5
   -- timeout 500ms
-  pSock:settimeout(0.5)
+  pSock:settimeout(0.2)
   while true do
     local header, errCode, partialResult = pSock:receive(headerBytes)
     if header ~= nil then
@@ -91,6 +105,7 @@ function handleSock(pSock, pRequestsQueue)
       end
     else
       -- error
+      print("Receive error : ",errCode)
       if errCode == "timeout" then
         return nil, errCode
       elseif errCode == "closed" then
@@ -123,9 +138,10 @@ end
 
 function treatCmd(pCmd, pSock, pQueue)
   --
-  if pCmd == MSG_CMD.PING then
+  print("Treat command : ", pCmd.cmd, pCmd.id, pCmd.len, pCmd.data)
+  if pCmd.cmd == MSG_CMD.PING then
     sendCmd(pSock, pQueue, MSG_CMD.RSP, pCmd.id, nil, 200)
-  elseif pCmd == MSG_CMD.HW or pCmd == MSG_CMD.BRIDGE then
+  elseif pCmd.cmd == MSG_CMD.HW or pCmd.cmd == MSG_CMD.BRIDGE then
     processCmd(pCmd, pSock, pQueue)
   else
     print("Command not handled : ", pCmd)
@@ -134,8 +150,54 @@ end
 
 function processCmd(pCmd, pSock, pQueue)
   -- check cmd in payload
-  dataItems = String.split(pCmd.data
+  pCmd.params = {}
+  i = 1
+  for w in string.gmatch(pCmd.data,"%Z+") do
+    pCmd.params[i] = w
+    i=i+1
+  end
+  if #pCmd.params == 1 then
+    if pCmd.params[1] == "info" then
 
+    else
+      return false, "Invalid command " .. pCmd.params[1]
+    end
+  elseif #pCmd.params == 2 then
+    local pin = tonumber(pCmd.params[2])
+    if pin ~= nil then
+      if pCmd.params[1] == "dr" then --digital read
+        local pinValue = digitalRead(pin)
+        local payload = "dw\0" .. tostring(pin) .. "\0" .. tostring(pinValue)
+        sendCmd(pSock, pQueue, MSG_CMD.HW, pCmd.id, payload)
+      elseif pCmd.params[1] == "ar" then --analog read
+        local pinValue = analogRead(pin)
+        local payload = "aw\0" .. tostring(pin) .. "\0" .. tostring(pinValue)
+        sendCmd(pSock, pQueue, MSG_CMD.HW, pCmd.id, payload)
+      elseif pCmd.params[1] == "vr" then --virtual read
+        local pinValue = virtualRead(pin)
+        local payload = "vw\0" .. tostring(pin) .. "\0" .. tostring(pinValue)
+        sendCmd(pSock, pQueue, MSG_CMD.HW, pCmd.id, payload) 
+      else
+        return false, "Invalid command " .. pCmd.params[1]
+      end
+    else
+      print("Invalid pin : ", pCmd.params[2])
+    end
+  elseif #pCmd.params > 2 then
+    if pCmd.params[1] == "dw" then --digital write
+
+    elseif pCmd.params[1] == "aw" then --analog write
+
+    elseif pCmd.params[1] == "vw" then --virtual write
+
+    elseif pCmd.params[1] == "pm" then --pin mode setting
+
+    else
+      return false, "Invalid command " .. pCmd.params[1]
+    end
+  else
+    print("No command")
+  end
 end
 
 blynk = {}
